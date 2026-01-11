@@ -12,13 +12,29 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # States
 REGISTER_USERNAME, REGISTER_PASSWORD = range(2)
+ADMIN_GIVE_SUB_USER, ADMIN_GIVE_SUB_DAYS = range(2, 4)
+ADMIN_RESET_HWID_USER = 4
+ADMIN_BAN_USER = 5
+
+ADMIN_IDS = [int(os.getenv("ADMIN_ID", "7463401648"))]
+
+def is_admin(user_id: int) -> bool:
+    return user_id in ADMIN_IDS
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    
     keyboard = [
         [InlineKeyboardButton("📝 Регистрация", callback_data="register")],
         [InlineKeyboardButton("👤 Мой профиль", callback_data="profile")],
         [InlineKeyboardButton("🔄 Сбросить HWID", callback_data="reset_hwid")],
+        [InlineKeyboardButton("📥 Скачать лоадер", callback_data="download_loader")],
     ]
+    
+    # Админ кнопки
+    if is_admin(user_id):
+        keyboard.append([InlineKeyboardButton("⚙️ Админ панель", callback_data="admin_panel")])
+    
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.message.reply_text(
@@ -44,11 +60,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == "profile":
         user = await database.get_user_by_telegram_id(query.from_user.id)
         if not user:
-            await query.edit_message_text("❌ Вы не зарегистрированы")
-            return
+            await query.edit_message_text("❌ Вы не зарегистрированы\n\nНажмите /start и выберите Регистрация")
+            return ConversationHandler.END
         
         sub_status = "✅ Активна" if await database.check_subscription(user['username']) else "❌ Истекла"
         hwid_status = "✅ Привязан" if user['hwid'] else "❌ Не привязан"
+        
+        keyboard = [[InlineKeyboardButton("◀️ Назад", callback_data="back_main")]]
         
         await query.edit_message_text(
             f"👤 *Ваш профиль*\n\n"
@@ -56,18 +74,143 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Подписка: {sub_status}\n"
             f"До: {user['subscription_end'] or 'N/A'}\n"
             f"HWID: {hwid_status}",
-            parse_mode="Markdown"
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard)
         )
+        return ConversationHandler.END
     
     elif query.data == "reset_hwid":
         user = await database.get_user_by_telegram_id(query.from_user.id)
         if not user:
             await query.edit_message_text("❌ Вы не зарегистрированы")
-            return
+            return ConversationHandler.END
         
         await database.reset_hwid(user['username'])
-        await query.edit_message_text("✅ HWID сброшен. При следующем входе привяжется новый компьютер.")
+        keyboard = [[InlineKeyboardButton("◀️ Назад", callback_data="back_main")]]
+        await query.edit_message_text(
+            "✅ HWID сброшен!\n\nПри следующем входе привяжется новый компьютер.",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return ConversationHandler.END
+    
+    elif query.data == "back_main":
+        user_id = query.from_user.id
+        keyboard = [
+            [InlineKeyboardButton("📝 Регистрация", callback_data="register")],
+            [InlineKeyboardButton("👤 Мой профиль", callback_data="profile")],
+            [InlineKeyboardButton("🔄 Сбросить HWID", callback_data="reset_hwid")],
+            [InlineKeyboardButton("📥 Скачать лоадер", callback_data="download_loader")],
+        ]
+        if is_admin(user_id):
+            keyboard.append([InlineKeyboardButton("⚙️ Админ панель", callback_data="admin_panel")])
+        
+        await query.edit_message_text(
+            "🎮 *Matrix Client*\n\n"
+            "Добро пожаловать в бот управления подпиской!\n\n"
+            "Выберите действие:",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="Markdown"
+        )
+        return ConversationHandler.END
+    
+    elif query.data == "download_loader":
+        keyboard = [[InlineKeyboardButton("◀️ Назад", callback_data="back_main")]]
+        
+        # Ссылка на лоадер (обнови когда загрузишь .exe на GitHub)
+        loader_url = os.getenv("LOADER_DOWNLOAD_URL", "")
+        
+        if loader_url:
+            await query.edit_message_text(
+                "📥 *Скачать Matrix Loader*\n\n"
+                f"[Нажми чтобы скачать]({loader_url})\n\n"
+                "После скачивания запусти и войди с логином/паролем.",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        else:
+            await query.edit_message_text(
+                "📥 *Скачать Matrix Loader*\n\n"
+                "Лоадер пока недоступен. Обратитесь к администратору.",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        return ConversationHandler.END
+    
+    # Админ панель
+    elif query.data == "admin_panel":
+        if not is_admin(query.from_user.id):
+            await query.edit_message_text("❌ Нет доступа")
+            return ConversationHandler.END
+        
+        keyboard = [
+            [InlineKeyboardButton("🎁 Выдать подписку", callback_data="admin_give_sub")],
+            [InlineKeyboardButton("🔄 Сбросить HWID", callback_data="admin_reset_hwid")],
+            [InlineKeyboardButton("📋 Список юзеров", callback_data="admin_list_users")],
+            [InlineKeyboardButton("🚫 Забанить", callback_data="admin_ban")],
+            [InlineKeyboardButton("◀️ Назад", callback_data="back_main")],
+        ]
+        
+        await query.edit_message_text(
+            "⚙️ *Админ панель*\n\n"
+            "Выберите действие:",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="Markdown"
+        )
+        return ConversationHandler.END
+    
+    elif query.data == "admin_give_sub":
+        if not is_admin(query.from_user.id):
+            return ConversationHandler.END
+        
+        await query.edit_message_text(
+            "🎁 *Выдача подписки*\n\n"
+            "Введите логин пользователя:",
+            parse_mode="Markdown"
+        )
+        return ADMIN_GIVE_SUB_USER
+    
+    elif query.data == "admin_reset_hwid":
+        if not is_admin(query.from_user.id):
+            return ConversationHandler.END
+        
+        await query.edit_message_text(
+            "🔄 *Сброс HWID*\n\n"
+            "Введите логин пользователя:",
+            parse_mode="Markdown"
+        )
+        return ADMIN_RESET_HWID_USER
+    
+    elif query.data == "admin_list_users":
+        if not is_admin(query.from_user.id):
+            return ConversationHandler.END
+        
+        users = await database.get_all_users()
+        if not users:
+            text = "📋 Пользователей нет"
+        else:
+            text = "📋 *Список пользователей:*\n\n"
+            for u in users[:20]:  # Максимум 20
+                sub_ok = "✅" if await database.check_subscription(u['username']) else "❌"
+                text += f"{sub_ok} `{u['username']}`\n"
+        
+        keyboard = [[InlineKeyboardButton("◀️ Назад", callback_data="admin_panel")]]
+        await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+        return ConversationHandler.END
+    
+    elif query.data == "admin_ban":
+        if not is_admin(query.from_user.id):
+            return ConversationHandler.END
+        
+        await query.edit_message_text(
+            "🚫 *Бан пользователя*\n\n"
+            "Введите логин пользователя:",
+            parse_mode="Markdown"
+        )
+        return ADMIN_BAN_USER
+    
+    return ConversationHandler.END
 
+# Регистрация
 async def register_username(update: Update, context: ContextTypes.DEFAULT_TYPE):
     username = update.message.text.strip()
     
@@ -104,7 +247,8 @@ async def register_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             f"✅ *Регистрация успешна!*\n\n"
             f"Логин: `{username}`\n\n"
-            f"Для активации подписки обратитесь к администратору.",
+            f"Для активации подписки обратитесь к администратору.\n\n"
+            f"Нажмите /start для возврата в меню.",
             parse_mode="Markdown"
         )
     except Exception as e:
@@ -112,47 +256,96 @@ async def register_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     return ConversationHandler.END
 
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Отменено")
-    return ConversationHandler.END
+# Админ: выдача подписки
+async def admin_give_sub_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    username = update.message.text.strip()
+    user = await database.get_user_by_username(username)
+    
+    if not user:
+        await update.message.reply_text("❌ Пользователь не найден. Попробуйте ещё раз:")
+        return ADMIN_GIVE_SUB_USER
+    
+    context.user_data['admin_target_user'] = username
+    await update.message.reply_text(f"Пользователь: `{username}`\n\nВведите количество дней подписки:", parse_mode="Markdown")
+    return ADMIN_GIVE_SUB_DAYS
 
-# Админ команды
-async def give_sub(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Проверка что это админ
-    ADMIN_IDS = [int(os.getenv("ADMIN_ID", "7463401648"))]
+async def admin_give_sub_days(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        days = int(update.message.text.strip())
+    except ValueError:
+        await update.message.reply_text("❌ Введите число")
+        return ADMIN_GIVE_SUB_DAYS
     
-    if update.effective_user.id not in ADMIN_IDS:
-        return
-    
-    if len(context.args) < 2:
-        await update.message.reply_text("Использование: /givesub username days")
-        return
-    
-    username = context.args[0]
-    days = int(context.args[1])
-    
+    username = context.user_data['admin_target_user']
     end_date = datetime.now() + timedelta(days=days)
     await database.set_subscription(username, end_date)
     
-    await update.message.reply_text(f"✅ Подписка выдана {username} до {end_date.strftime('%Y-%m-%d')}")
+    await update.message.reply_text(
+        f"✅ Подписка выдана!\n\n"
+        f"Пользователь: `{username}`\n"
+        f"До: {end_date.strftime('%Y-%m-%d')}\n\n"
+        f"/start - вернуться в меню",
+        parse_mode="Markdown"
+    )
+    return ConversationHandler.END
+
+# Админ: сброс HWID
+async def admin_reset_hwid_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    username = update.message.text.strip()
+    user = await database.get_user_by_username(username)
+    
+    if not user:
+        await update.message.reply_text("❌ Пользователь не найден")
+        return ConversationHandler.END
+    
+    await database.reset_hwid(username)
+    await update.message.reply_text(
+        f"✅ HWID сброшен для `{username}`\n\n/start - вернуться в меню",
+        parse_mode="Markdown"
+    )
+    return ConversationHandler.END
+
+# Админ: бан
+async def admin_ban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    username = update.message.text.strip()
+    user = await database.get_user_by_username(username)
+    
+    if not user:
+        await update.message.reply_text("❌ Пользователь не найден")
+        return ConversationHandler.END
+    
+    await database.ban_user(username)
+    await update.message.reply_text(
+        f"🚫 Пользователь `{username}` забанен\n\n/start - вернуться в меню",
+        parse_mode="Markdown"
+    )
+    return ConversationHandler.END
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Отменено. /start - вернуться в меню")
+    return ConversationHandler.END
 
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
     
-    # Регистрация
+    # Главный обработчик диалогов
     conv_handler = ConversationHandler(
-        entry_points=[CallbackQueryHandler(button_handler, pattern="^register$")],
+        entry_points=[
+            CallbackQueryHandler(button_handler),
+        ],
         states={
             REGISTER_USERNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, register_username)],
             REGISTER_PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, register_password)],
+            ADMIN_GIVE_SUB_USER: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_give_sub_user)],
+            ADMIN_GIVE_SUB_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_give_sub_days)],
+            ADMIN_RESET_HWID_USER: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_reset_hwid_user)],
+            ADMIN_BAN_USER: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_ban_user)],
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
+        fallbacks=[CommandHandler("cancel", cancel), CommandHandler("start", start)],
     )
     
     app.add_handler(CommandHandler("start", start))
     app.add_handler(conv_handler)
-    app.add_handler(CallbackQueryHandler(button_handler))
-    app.add_handler(CommandHandler("givesub", give_sub))
     
     print("Bot started!")
     app.run_polling()
