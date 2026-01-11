@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from datetime import datetime, timedelta
@@ -89,12 +89,16 @@ async def download_client(username: str = Depends(verify_token)):
         raise HTTPException(status_code=403, detail="Subscription expired")
     
     # Скачиваем JAR из облака и отдаём клиенту
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(follow_redirects=True, timeout=60.0) as client:
         response = await client.get(CLIENT_JAR_URL)
         if response.status_code != 200:
             raise HTTPException(status_code=500, detail="Failed to fetch client")
         
-        return response.content
+        return Response(
+            content=response.content,
+            media_type="application/java-archive",
+            headers={"Content-Disposition": "attachment; filename=client.jar"}
+        )
 
 @app.get("/update/check", response_model=UpdateCheckResponse)
 async def check_update(version: str = "0.0.0"):
