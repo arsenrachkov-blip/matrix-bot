@@ -72,3 +72,17 @@ async def check_subscription(username: str) -> bool:
         return False
     end_date = datetime.fromisoformat(user['subscription_end'])
     return datetime.now() < end_date
+
+async def get_all_users():
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute('SELECT * FROM users ORDER BY id DESC') as cursor:
+            return await cursor.fetchall()
+
+async def ban_user(username: str):
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            'UPDATE users SET is_active = 0 WHERE username = ?',
+            (username,)
+        )
+        await db.commit()
